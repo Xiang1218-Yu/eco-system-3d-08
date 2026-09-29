@@ -11,6 +11,7 @@ export function useEcosystemSimulation() {
   const batchRemoveOrganisms = useEcosystemStore((s) => s.batchRemoveOrganisms);
   const addOrganism = useEcosystemStore((s) => s.addOrganism);
   const incrementTime = useEcosystemStore((s) => s.incrementTime);
+  const recordSnapshot = useEcosystemStore((s) => s.recordSnapshot);
   const isRunning = useEcosystemStore((s) => s.isRunning);
 
   useEffect(() => {
@@ -36,6 +37,7 @@ export function useEcosystemSimulation() {
         });
 
         incrementTime();
+        recordSnapshot();
       }
 
       frameRef.current = requestAnimationFrame(tick);
@@ -48,5 +50,5 @@ export function useEcosystemSimulation() {
         cancelAnimationFrame(frameRef.current);
       }
     };
-  }, [batchUpdateOrganisms, batchRemoveOrganisms, addOrganism, incrementTime]);
+  }, [batchUpdateOrganisms, batchRemoveOrganisms, addOrganism, incrementTime, recordSnapshot]);
 }

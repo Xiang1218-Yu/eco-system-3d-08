@@ -35,6 +35,34 @@ export interface Organism {
   scale: number;
 }
 
+export interface Vector3Snapshot {
+  x: number;
+  y: number;
+  z: number;
+}
+
+export interface OrganismSnapshot {
+  id: string;
+  speciesId: string;
+  position: Vector3Snapshot;
+  velocity: Vector3Snapshot;
+  energy: number;
+  age: number;
+  state: OrganismState;
+  targetId: string | null;
+  rotation: number;
+  scale: number;
+}
+
+export interface EcosystemSnapshot {
+  id: string;
+  timestamp: number;
+  simulationTime: number;
+  organisms: OrganismSnapshot[];
+  selectedOrganismId: string | null;
+  selectedSpeciesId: string | null;
+}
+
 export interface EcosystemStats {
   time: number;
   isRunning: boolean;

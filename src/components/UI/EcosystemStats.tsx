@@ -1,17 +1,17 @@
-import { useMemo } from 'react';
 import { GlassCard } from '@/components/common/GlassCard';
 import { useEcosystemStore } from '@/store/useEcosystemStore';
 import { SPECIES, TROPHIC_LEVEL_COLORS, TROPHIC_LEVEL_LABELS } from '@/data/species';
 import type { TrophicLevel } from '@/types/ecosystem';
 
 export function EcosystemStats() {
-  const organisms = useEcosystemStore((s) => s.organisms);
-  const simulationTime = useEcosystemStore((s) => s.simulationTime);
+  // Subscribing to these values also re-renders the panel while scrubbing snapshots.
+  useEcosystemStore((s) => s.organisms);
+  useEcosystemStore((s) => s.simulationTime);
   const getStats = useEcosystemStore((s) => s.getStats);
 
-  const stats = useMemo(() => getStats(), [organisms, simulationTime, getStats]);
+  const stats = getStats();
 
-  const levelData = useMemo(() => {
+  const levelData = (() => {
     const levels: Record<TrophicLevel, number> = {
       producer: 0,
       herbivore: 0,
@@ -22,7 +22,7 @@ export function EcosystemStats() {
       levels[sp.trophicLevel] += stats.populationBySpecies[sp.id] || 0;
     });
     return levels;
-  }, [stats.populationBySpecies]);
+  })();
 
   const formatTime = (t: number) => {
     const mins = Math.floor(t / 100);

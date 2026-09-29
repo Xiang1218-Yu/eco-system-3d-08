@@ -1,6 +1,6 @@
 import { GlassCard } from '@/components/common/GlassCard';
 import { useEcosystemStore } from '@/store/useEcosystemStore';
-import { getSpeciesById, SPECIES, TROPHIC_LEVEL_COLORS, TROPHIC_LEVEL_LABELS } from '@/data/species';
+import { getSpeciesById, TROPHIC_LEVEL_COLORS, TROPHIC_LEVEL_LABELS } from '@/data/species';
 import { X, Trash2 } from 'lucide-react';
 
 export function SpeciesInfoCard() {
@@ -8,6 +8,7 @@ export function SpeciesInfoCard() {
   const organisms = useEcosystemStore((s) => s.organisms);
   const setSelectedOrganism = useEcosystemStore((s) => s.setSelectedOrganism);
   const removeOrganism = useEcosystemStore((s) => s.removeOrganism);
+  const isPlayback = useEcosystemStore((s) => s.isPlayback);
 
   const organism = organisms.find((o) => o.id === selectedOrganismId);
   const species = organism ? getSpeciesById(organism.speciesId) : null;
@@ -151,13 +152,19 @@ export function SpeciesInfoCard() {
 
         <button
           onClick={() => {
+            if (isPlayback) return;
             removeOrganism(organism.id);
             setSelectedOrganism(null);
           }}
-          className="mt-4 w-full flex items-center justify-center gap-2 py-2 rounded-xl bg-red-500/20 text-red-400 hover:bg-red-500/30 transition-colors text-sm font-medium"
+          disabled={isPlayback}
+          className={`mt-4 w-full flex items-center justify-center gap-2 py-2 rounded-xl transition-colors text-sm font-medium ${
+            isPlayback
+              ? 'bg-white/5 text-white/30 cursor-not-allowed'
+              : 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
+          }`}
         >
           <Trash2 size={16} />
-          移除此生物
+          {isPlayback ? '历史快照不可修改' : '移除此生物'}
         </button>
       </GlassCard>
     </div>

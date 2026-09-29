@@ -1,6 +1,6 @@
 import { GlassCard } from '@/components/common/GlassCard';
 import { useEcosystemStore } from '@/store/useEcosystemStore';
-import { Play, Pause, RotateCcw, Eye, EyeOff, Sparkles } from 'lucide-react';
+import { Play, Pause, RotateCcw, Eye, EyeOff, Sparkles, History } from 'lucide-react';
 
 export function ControlButtons() {
   const isRunning = useEcosystemStore((s) => s.isRunning);
@@ -9,6 +9,7 @@ export function ControlButtons() {
   const showLabels = useEcosystemStore((s) => s.showLabels);
   const toggleLabels = useEcosystemStore((s) => s.toggleLabels);
   const selectedSpeciesId = useEcosystemStore((s) => s.selectedSpeciesId);
+  const isPlayback = useEcosystemStore((s) => s.isPlayback);
 
   return (
     <div className="absolute top-4 left-1/2 -translate-x-1/2 z-40">
@@ -20,6 +21,13 @@ export function ControlButtons() {
           </span>
         </div>
 
+        {isPlayback && (
+          <div className="px-3 py-1 rounded-full bg-amber-500/30 text-amber-300 text-sm flex items-center gap-1">
+            <History size={14} />
+            时间轴回放中
+          </div>
+        )}
+
         {selectedSpeciesId && (
           <div className="px-3 py-1 rounded-full bg-cyan-500/30 text-cyan-300 text-sm animate-pulse">
             👆 点击缸内任意位置放置物种
@@ -30,9 +38,9 @@ export function ControlButtons() {
           <button
             onClick={toggleSimulation}
             className="p-2 rounded-xl hover:bg-white/10 transition-colors text-white"
-            title={isRunning ? '暂停模拟' : '开始模拟'}
+            title={isPlayback ? '退出回放并继续' : isRunning ? '暂停模拟' : '开始模拟'}
           >
-            {isRunning ? <Pause size={18} /> : <Play size={18} />}
+            {isPlayback || !isRunning ? <Play size={18} /> : <Pause size={18} />}
           </button>
 
           <button

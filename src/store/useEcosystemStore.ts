@@ -1,6 +1,11 @@
 import { create } from 'zustand';
 import * as THREE from 'three';
-import type { Organism, EcosystemStats, Species } from '@/types/ecosystem';
+import type {
+  EcosystemSnapshot,
+  Organism,
+  EcosystemStats,
+  Species,
+} from '@/types/ecosystem';
 import { getSpeciesById, SPECIES } from '@/data/species';
 
 interface EcosystemStore {
@@ -10,6 +15,9 @@ interface EcosystemStore {
   isRunning: boolean;
   simulationTime: number;
   showLabels: boolean;
+  snapshots: EcosystemSnapshot[];
+  isPlayback: boolean;
+  playbackIndex: number | null;
 
   addOrganism: (speciesId: string, position?: THREE.Vector3) => void;
   removeOrganism: (organismId: string) => void;
@@ -23,6 +31,10 @@ interface EcosystemStore {
   getStats: () => EcosystemStats;
   batchUpdateOrganisms: (updates: { id: string; updates: Partial<Organism> }[]) => void;
   batchRemoveOrganisms: (ids: string[]) => void;
+  recordSnapshot: (force?: boolean) => void;
+  enterPlayback: () => void;
+  selectSnapshot: (index: number) => void;
+  exitPlayback: () => void;
 }
 
 const AQUARIUM_BOUNDS = {
@@ -74,6 +86,67 @@ function createOrganism(speciesId: string, position?: THREE.Vector3): Organism |
   };
 }
 
+export const SNAPSHOT_INTERVAL = 30;
+export const MAX_SNAPSHOT_HISTORY = 100;
+
+function createSnapshot(
+  simulationTime: number,
+  organisms: Organism[],
+  selectedOrganismId: string | null,
+  selectedSpeciesId: string | null,
+): EcosystemSnapshot {
+  return {
+    id: generateId(),
+    timestamp: Date.now(),
+    simulationTime,
+    organisms: organisms.map((organism) => ({
+      id: organism.id,
+      speciesId: organism.speciesId,
+      position: {
+        x: organism.position.x,
+        y: organism.position.y,
+        z: organism.position.z,
+      },
+      velocity: {
+        x: organism.velocity.x,
+        y: organism.velocity.y,
+        z: organism.velocity.z,
+      },
+      energy: organism.energy,
+      age: organism.age,
+      state: organism.state,
+      targetId: organism.targetId,
+      rotation: organism.rotation,
+      scale: organism.scale,
+    })),
+    selectedOrganismId,
+    selectedSpeciesId,
+  };
+}
+
+function restoreSnapshot(snapshot: EcosystemSnapshot): Organism[] {
+  return snapshot.organisms.map((organism) => ({
+    id: organism.id,
+    speciesId: organism.speciesId,
+    position: new THREE.Vector3(
+      organism.position.x,
+      organism.position.y,
+      organism.position.z,
+    ),
+    velocity: new THREE.Vector3(
+      organism.velocity.x,
+      organism.velocity.y,
+      organism.velocity.z,
+    ),
+    energy: organism.energy,
+    age: organism.age,
+    state: organism.state,
+    targetId: organism.targetId,
+    rotation: organism.rotation,
+    scale: organism.scale,
+  }));
+}
+
 export const useEcosystemStore = create<EcosystemStore>((set, get) => ({
   organisms: [],
   selectedSpeciesId: null,
@@ -81,8 +154,13 @@ export const useEcosystemStore = create<EcosystemStore>((set, get) => ({
   isRunning: true,
   simulationTime: 0,
   showLabels: true,
+  snapshots: [],
+  isPlayback: false,
+  playbackIndex: null,
 
   addOrganism: (speciesId, position) => {
+    if (get().isPlayback) return;
+
     const state = get();
     const species = getSpeciesById(speciesId);
     if (!species) return;
@@ -97,6 +175,8 @@ export const useEcosystemStore = create<EcosystemStore>((set, get) => ({
   },
 
   removeOrganism: (organismId) => {
+    if (get().isPlayback) return;
+
     set((prev) => ({
       organisms: prev.organisms.filter((o) => o.id !== organismId),
       selectedOrganismId: prev.selectedOrganismId === organismId ? null : prev.selectedOrganismId,
@@ -104,12 +184,16 @@ export const useEcosystemStore = create<EcosystemStore>((set, get) => ({
   },
 
   updateOrganism: (organismId, updates) => {
+    if (get().isPlayback) return;
+
     set((prev) => ({
       organisms: prev.organisms.map((o) => (o.id === organismId ? { ...o, ...updates } : o)),
     }));
   },
 
   batchUpdateOrganisms: (updates) => {
+    if (get().isPlayback) return;
+
     set((prev) => {
       const updateMap = new Map(updates.map((u) => [u.id, u.updates]));
       return {
@@ -122,6 +206,8 @@ export const useEcosystemStore = create<EcosystemStore>((set, get) => ({
   },
 
   batchRemoveOrganisms: (ids) => {
+    if (get().isPlayback) return;
+
     const idSet = new Set(ids);
     set((prev) => ({
       organisms: prev.organisms.filter((o) => !idSet.has(o.id)),
@@ -131,6 +217,7 @@ export const useEcosystemStore = create<EcosystemStore>((set, get) => ({
   },
 
   setSelectedSpecies: (speciesId) => {
+    if (get().isPlayback) return;
     set({ selectedSpeciesId: speciesId });
   },
 
@@ -139,10 +226,15 @@ export const useEcosystemStore = create<EcosystemStore>((set, get) => ({
   },
 
   toggleSimulation: () => {
+    if (get().isPlayback) {
+      get().exitPlayback();
+      return;
+    }
     set((prev) => ({ isRunning: !prev.isRunning }));
   },
 
   incrementTime: () => {
+    if (get().isPlayback) return;
     set((prev) => ({ simulationTime: prev.simulationTime + 1 }));
   },
 
@@ -153,6 +245,123 @@ export const useEcosystemStore = create<EcosystemStore>((set, get) => ({
       selectedOrganismId: null,
       simulationTime: 0,
       isRunning: true,
+      snapshots: [],
+      isPlayback: false,
+      playbackIndex: null,
+    });
+  },
+
+  recordSnapshot: (force = false) => {
+    const state = get();
+    if (state.isPlayback) return;
+
+    const latest = state.snapshots[state.snapshots.length - 1];
+    if (
+      !force &&
+      latest &&
+      state.simulationTime - latest.simulationTime < SNAPSHOT_INTERVAL
+    ) {
+      return;
+    }
+
+    const snapshot = createSnapshot(
+      state.simulationTime,
+      state.organisms,
+      state.selectedOrganismId,
+      state.selectedSpeciesId,
+    );
+
+    set((prev) => {
+      const existingIndex = prev.snapshots.findIndex(
+        (item) => item.simulationTime === state.simulationTime,
+      );
+      // A forced capture is only used to refresh an exact checkpoint. Playback
+      // starts at the latest fixed marker, so it never creates off-grid data.
+      if (force && existingIndex < 0) return prev;
+
+      const nextSnapshots =
+        existingIndex >= 0
+          ? prev.snapshots.map((item, index) =>
+              index === existingIndex ? snapshot : item,
+            )
+          : [...prev.snapshots, snapshot];
+
+      nextSnapshots.sort((a, b) => a.simulationTime - b.simulationTime);
+
+      const limitedSnapshots = nextSnapshots.length > MAX_SNAPSHOT_HISTORY
+        ? nextSnapshots.slice(-MAX_SNAPSHOT_HISTORY)
+        : nextSnapshots;
+
+      return { snapshots: limitedSnapshots };
+    });
+  },
+
+  enterPlayback: () => {
+    const state = get();
+    if (state.isPlayback) return;
+
+    state.recordSnapshot(true);
+    const snapshots = get().snapshots;
+    if (snapshots.length === 0) return;
+
+    const playbackIndex = snapshots.length - 1;
+    const snapshot = snapshots[playbackIndex];
+
+    set({
+      isPlayback: true,
+      playbackIndex,
+      isRunning: false,
+      selectedSpeciesId: null,
+      simulationTime: snapshot.simulationTime,
+      organisms: restoreSnapshot(snapshot),
+      selectedOrganismId: snapshot.selectedOrganismId,
+    });
+  },
+
+  selectSnapshot: (index) => {
+    const state = get();
+    if (!state.isPlayback) return;
+
+    const snapshot = state.snapshots[index];
+    if (!snapshot) return;
+
+    set({
+      playbackIndex: index,
+      simulationTime: snapshot.simulationTime,
+      organisms: restoreSnapshot(snapshot),
+      selectedOrganismId: snapshot.selectedOrganismId,
+      selectedSpeciesId: null,
+    });
+  },
+
+  exitPlayback: () => {
+    const state = get();
+    if (!state.isPlayback) return;
+
+    const playbackIndex = state.playbackIndex ?? state.snapshots.length - 1;
+    const indexedSnapshot = state.snapshots[playbackIndex];
+
+    if (!indexedSnapshot) {
+      set({ isPlayback: false, playbackIndex: null, isRunning: true });
+      return;
+    }
+
+    const snapshot =
+      state.snapshots.find((item) => item.id === indexedSnapshot.id) ??
+      indexedSnapshot;
+    const snapshotIndex = state.snapshots.findIndex(
+      (item) => item.id === snapshot.id,
+    );
+
+    set({
+      isPlayback: false,
+      playbackIndex: null,
+      isRunning: true,
+      snapshots: state.snapshots.slice(0, snapshotIndex + 1),
+      simulationTime: snapshot.simulationTime,
+      organisms: restoreSnapshot(snapshot),
+      selectedOrganismId: snapshot.selectedOrganismId,
+      selectedSpeciesId: null,
     });
   },
 
