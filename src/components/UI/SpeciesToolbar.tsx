@@ -9,9 +9,14 @@ export function SpeciesToolbar() {
   const selectedSpeciesId = useEcosystemStore((s) => s.selectedSpeciesId);
   const setSelectedSpecies = useEcosystemStore((s) => s.setSelectedSpecies);
   const organisms = useEcosystemStore((s) => s.organisms);
+  const isPlayback = useEcosystemStore((s) => s.isPlayback);
 
   return (
-    <div className="absolute left-4 top-20 z-20 flex flex-col gap-2 max-h-[calc(100vh-28rem)] overflow-y-auto pr-2 pb-3 scrollbar-thin">
+    <div
+      className={`absolute left-4 top-20 z-20 flex flex-col gap-2 max-h-[calc(100vh-28rem)] overflow-y-auto pr-2 pb-3 scrollbar-thin transition-opacity ${
+        isPlayback ? 'opacity-40 pointer-events-none' : ''
+      }`}
+    >
       {LEVEL_ORDER.map((level) => {
         const levelSpecies = SPECIES.filter((s) => s.trophicLevel === level);
         return (

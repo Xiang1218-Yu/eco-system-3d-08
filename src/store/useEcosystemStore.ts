@@ -2,6 +2,31 @@ import { create } from 'zustand';
 import * as THREE from 'three';
 import type { Organism, EcosystemStats, Species } from '@/types/ecosystem';
 import { getSpeciesById, SPECIES } from '@/data/species';
+import {
+  type Snapshot,
+  cloneOrganisms,
+  restoreOrganisms,
+} from '@/utils/snapshotUtils';
+
+/** 每隔多少个模拟步保存一次快照（每步约 60ms） */
+export const SNAPSHOT_INTERVAL = 15;
+/** 历史快照容量上限，超出后丢弃最旧的一帧（环形缓冲） */
+export const MAX_HISTORY_SNAPSHOTS = 120;
+
+/**
+ * 进入回放瞬间保存的“实时活态”检查点（不放进 store state，避免无谓重渲染）。
+ * 退出回放时从这里恢复，使模拟从进入时的停留时刻继续。
+ */
+interface LiveCheckpoint {
+  organisms: Organism[];
+  simulationTime: number;
+  selectedOrganismId: string | null;
+  selectedSpeciesId: string | null;
+  wasRunning: boolean;
+}
+
+let liveCheckpoint: LiveCheckpoint | null = null;
+let snapshotIdSeq = 0;
 
 interface EcosystemStore {
   organisms: Organism[];
@@ -10,6 +35,11 @@ interface EcosystemStore {
   isRunning: boolean;
   simulationTime: number;
   showLabels: boolean;
+
+  // —— 时间轴回放 ——
+  history: Snapshot[];
+  isPlayback: boolean;
+  playbackIndex: number | null;
 
   addOrganism: (speciesId: string, position?: THREE.Vector3) => void;
   removeOrganism: (organismId: string) => void;
@@ -23,6 +53,11 @@ interface EcosystemStore {
   getStats: () => EcosystemStats;
   batchUpdateOrganisms: (updates: { id: string; updates: Partial<Organism> }[]) => void;
   batchRemoveOrganisms: (ids: string[]) => void;
+
+  pushSnapshot: () => void;
+  enterPlayback: () => void;
+  seekPlayback: (index: number) => void;
+  exitPlayback: () => void;
 }
 
 const AQUARIUM_BOUNDS = {
@@ -82,8 +117,14 @@ export const useEcosystemStore = create<EcosystemStore>((set, get) => ({
   simulationTime: 0,
   showLabels: true,
 
+  history: [],
+  isPlayback: false,
+  playbackIndex: null,
+
   addOrganism: (speciesId, position) => {
     const state = get();
+    // 回放中展示的是历史帧，禁止改动实时生态缸
+    if (state.isPlayback) return;
     const species = getSpeciesById(speciesId);
     if (!species) return;
 
@@ -97,6 +138,7 @@ export const useEcosystemStore = create<EcosystemStore>((set, get) => ({
   },
 
   removeOrganism: (organismId) => {
+    if (get().isPlayback) return;
     set((prev) => ({
       organisms: prev.organisms.filter((o) => o.id !== organismId),
       selectedOrganismId: prev.selectedOrganismId === organismId ? null : prev.selectedOrganismId,
@@ -104,12 +146,14 @@ export const useEcosystemStore = create<EcosystemStore>((set, get) => ({
   },
 
   updateOrganism: (organismId, updates) => {
+    if (get().isPlayback) return;
     set((prev) => ({
       organisms: prev.organisms.map((o) => (o.id === organismId ? { ...o, ...updates } : o)),
     }));
   },
 
   batchUpdateOrganisms: (updates) => {
+    if (get().isPlayback) return;
     set((prev) => {
       const updateMap = new Map(updates.map((u) => [u.id, u.updates]));
       return {
@@ -122,6 +166,7 @@ export const useEcosystemStore = create<EcosystemStore>((set, get) => ({
   },
 
   batchRemoveOrganisms: (ids) => {
+    if (get().isPlayback) return;
     const idSet = new Set(ids);
     set((prev) => ({
       organisms: prev.organisms.filter((o) => !idSet.has(o.id)),
@@ -131,28 +176,39 @@ export const useEcosystemStore = create<EcosystemStore>((set, get) => ({
   },
 
   setSelectedSpecies: (speciesId) => {
+    // 回放中不允许放置新物种
+    if (get().isPlayback) return;
     set({ selectedSpeciesId: speciesId });
   },
 
+  // 回放中允许点击历史生物查看其当时的信息，故不加守卫
   setSelectedOrganism: (organismId) => {
     set({ selectedOrganismId: organismId });
   },
 
   toggleSimulation: () => {
+    // 回放期间由时间轴面板控制暂停/继续，屏蔽主控制按钮
+    if (get().isPlayback) return;
     set((prev) => ({ isRunning: !prev.isRunning }));
   },
 
   incrementTime: () => {
+    if (get().isPlayback) return;
     set((prev) => ({ simulationTime: prev.simulationTime + 1 }));
   },
 
   resetEcosystem: () => {
+    // 重置会清空全部内容，同时丢弃历史与活态检查点、退出回放
+    liveCheckpoint = null;
     set({
       organisms: [],
       selectedSpeciesId: null,
       selectedOrganismId: null,
       simulationTime: 0,
       isRunning: true,
+      history: [],
+      isPlayback: false,
+      playbackIndex: null,
     });
   },
 
@@ -196,6 +252,99 @@ export const useEcosystemStore = create<EcosystemStore>((set, get) => ({
       populationBySpecies,
       totalOrganisms: total,
     };
+  },
+
+  // 按固定间隔保存带时间戳的深拷贝快照
+  pushSnapshot: () => {
+    const state = get();
+    if (state.isPlayback) return;
+
+    const snapshot: Snapshot = {
+      id: ++snapshotIdSeq,
+      time: state.simulationTime,
+      timestamp: Date.now(),
+      organisms: cloneOrganisms(state.organisms),
+      selectedOrganismId: state.selectedOrganismId,
+      selectedSpeciesId: state.selectedSpeciesId,
+    };
+
+    set((prev) => {
+      const history =
+        prev.history.length >= MAX_HISTORY_SNAPSHOTS
+          ? [...prev.history.slice(prev.history.length - MAX_HISTORY_SNAPSHOTS + 1), snapshot]
+          : [...prev.history, snapshot];
+      return { history };
+    });
+  },
+
+  // 进入回放：冻结实时活态检查点，暂停模拟并跳到最新一帧
+  enterPlayback: () => {
+    const state = get();
+    if (state.isPlayback) return;
+    if (state.history.length === 0) return;
+
+    liveCheckpoint = {
+      organisms: cloneOrganisms(state.organisms),
+      simulationTime: state.simulationTime,
+      selectedOrganismId: state.selectedOrganismId,
+      selectedSpeciesId: state.selectedSpeciesId,
+      wasRunning: state.isRunning,
+    };
+
+    const index = state.history.length - 1;
+    const snapshot = state.history[index];
+    set({
+      isPlayback: true,
+      playbackIndex: index,
+      isRunning: false,
+      organisms: restoreOrganisms(snapshot.organisms),
+      simulationTime: snapshot.time,
+      selectedOrganismId: snapshot.selectedOrganismId,
+      selectedSpeciesId: snapshot.selectedSpeciesId,
+    });
+  },
+
+  // 拖动滑块：原子地切换三维场景、统计时间与选中信息
+  seekPlayback: (index) => {
+    const state = get();
+    if (!state.isPlayback) return;
+
+    const clamped = Math.max(0, Math.min(index, state.history.length - 1));
+    const snapshot = state.history[clamped];
+    if (!snapshot) return;
+
+    set({
+      playbackIndex: clamped,
+      organisms: restoreOrganisms(snapshot.organisms),
+      simulationTime: snapshot.time,
+      selectedOrganismId: snapshot.selectedOrganismId,
+      selectedSpeciesId: snapshot.selectedSpeciesId,
+    });
+  },
+
+  // 退出回放：丢弃当前浏览的历史帧，从停留时刻（实时活态）继续运行
+  exitPlayback: () => {
+    const state = get();
+    if (!state.isPlayback) return;
+
+    const checkpoint = liveCheckpoint;
+    liveCheckpoint = null;
+
+    if (!checkpoint) {
+      // 理论上不会发生（进入时一定写入），保险起见做一次安全复位
+      set({ isPlayback: false, playbackIndex: null, isRunning: true });
+      return;
+    }
+
+    set({
+      isPlayback: false,
+      playbackIndex: null,
+      organisms: restoreOrganisms(checkpoint.organisms),
+      simulationTime: checkpoint.simulationTime,
+      selectedOrganismId: checkpoint.selectedOrganismId,
+      selectedSpeciesId: checkpoint.selectedSpeciesId,
+      isRunning: checkpoint.wasRunning,
+    });
   },
 }));
 

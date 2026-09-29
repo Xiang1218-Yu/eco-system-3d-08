@@ -6,6 +6,7 @@ import { EcosystemStats } from '@/components/UI/EcosystemStats';
 import { FoodWebPanel } from '@/components/UI/FoodWebPanel';
 import { SpeciesInfoCard } from '@/components/UI/SpeciesInfoCard';
 import { ControlButtons } from '@/components/UI/ControlButtons';
+import { TimelinePlayback } from '@/components/UI/TimelinePlayback';
 import { useEcosystemSimulation } from '@/hooks/useEcosystemSimulation';
 import { useEcosystemStore, AQUARIUM_BOUNDS } from '@/store/useEcosystemStore';
 
@@ -13,24 +14,24 @@ export function MainPage() {
   useEcosystemSimulation();
 
   const selectedSpeciesId = useEcosystemStore((s) => s.selectedSpeciesId);
+  const isPlayback = useEcosystemStore((s) => s.isPlayback);
   const addOrganism = useEcosystemStore((s) => s.addOrganism);
-  const setSelectedSpecies = useEcosystemStore((s) => s.setSelectedSpecies);
 
   useEffect(() => {
     const canvas = document.querySelector('canvas');
     if (canvas) {
-      canvas.style.cursor = selectedSpeciesId ? 'crosshair' : 'grab';
-      canvas.style.cursor = selectedSpeciesId ? 'crosshair' : '-webkit-grab';
+      canvas.style.cursor = selectedSpeciesId && !isPlayback ? 'crosshair' : 'grab';
+      canvas.style.cursor = selectedSpeciesId && !isPlayback ? 'crosshair' : '-webkit-grab';
     }
     return () => {
       if (canvas) {
         canvas.style.cursor = 'default';
       }
     };
-  }, [selectedSpeciesId]);
+  }, [selectedSpeciesId, isPlayback]);
 
   const handleAquariumClick = (point: THREE.Vector3) => {
-    if (!selectedSpeciesId) return;
+    if (!selectedSpeciesId || isPlayback) return;
 
     const clampedPoint = new THREE.Vector3(
       THREE.MathUtils.clamp(point.x, AQUARIUM_BOUNDS.minX + 0.3, AQUARIUM_BOUNDS.maxX - 0.3),
@@ -65,6 +66,7 @@ export function MainPage() {
       <EcosystemStats />
       <FoodWebPanel />
       <SpeciesInfoCard />
+      <TimelinePlayback />
 
       {selectedSpeciesId && (
         <div className="absolute inset-0 pointer-events-none z-5">
